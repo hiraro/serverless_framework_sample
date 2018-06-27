@@ -1,0 +1,134 @@
+service: hoge
+
+provider:
+  name: aws
+  region: ap-northeast-1
+  role: hoge
+  stage: ${opt:stage, self:custom.defaultStage}
+  profile: ${self:custom.profiles.${self:provider.stage}}
+  runtime: python3.6
+  timeout: 300
+  memorySize: 128
+  environment:
+    LOG_LEVEL: ${file(./env.${self:provider.stage}.json):LOG_LEVEL}
+    EVN_VAR: ${file(./env.${self:provider.stage}.json):EVN_VAR}
+
+package:
+  exclude:
+    - node_modules/**
+    - venv/**
+
+custom:
+  defaultStage: dev
+  accountId:
+    dev: 111111111111
+    prod: 999999999999
+  profiles:
+    dev: sls-dev
+    prod: sls
+
+functions:
+  step1:
+    name: ${self:provider.stage}-step1
+    handler: step1/lambda_handler.handle
+  step2:
+    name: ${self:provider.stage}-step2
+    handler: step2/lambda_handler.handle
+  step3:
+    name: ${self:provider.stage}-step3
+    handler: step3/lambda_handler.handle
+  on_failure:
+    name: ${self:provider.stage}-on_failure
+    handler: on_failure/lambda_handler.handle
+
+stepFunctions:
+  stateMachines:
+    hoge:
+      definition:
+        TimeoutSeconds: 1200
+        StartAt: step1
+        States:
+          step1:
+            Type: Task
+            Resource: "arn:aws:lambda:${self:provider.region}:${self:custom.accountId.${self:provider.stage}}:function:${self:provider.stage}-step1"
+            Next: wait_for_a_while
+            Catch:
+              - ErrorEquals:
+                  - "States.ALL"
+                Next: on_failure
+            Retry:
+              - ErrorEquals:
+                  - "States.ALL"
+                MaxAttempts: 0
+          wait_for_a_while:
+            Type: Wait
+            Seconds: 10
+            Next: step2
+          step2:
+            Type: Task
+            Resource: "arn:aws:lambda:${self:provider.region}:${self:custom.accountId.${self:provider.stage}}:function:${self:provider.stage}-step2"
+            Next: "shoould_wait?"
+            Catch:
+              - ErrorEquals:
+                  - "States.ALL"
+                Next: on_failure
+            Retry:
+              - ErrorEquals:
+                  - "States.ALL"
+                MaxAttempts: 0
+          "shoould_wait?":
+            Type: Choice
+            Choices:
+              - Variable: "$.should_wait"
+                BooleanEquals: true
+                Next: wait_for_a_while
+            Default: step3
+          step3:
+            Type: Task
+            Resource: "arn:aws:lambda:${self:provider.region}:${self:custom.accountId.${self:provider.stage}}:function:${self:provider.stage}-step3"
+            End: true
+            Catch:
+              - ErrorEquals:
+                  - "States.ALL"
+                Next: on_failure
+            Retry:
+              - ErrorEquals:
+                  - "States.ALL"
+                MaxAttempts: 0
+          on_failure:
+            Type: Task
+            Resource: "arn:aws:lambda:${self:provider.region}:${self:custom.accountId.${self:provider.stage}}:function:${self:provider.stage}-on_failure"
+            Next: Failure
+            Retry:
+              - ErrorEquals:
+                  - "States.ALL"
+                MaxAttempts: 0
+          Failure:
+            Type: Fail
+
+resources:
+  Resources:
+    hoge:
+      Type: AWS::IAM::Role
+      Properties:
+        Path: /
+        RoleName: hoge
+        AssumeRolePolicyDocument:
+          Version: '2012-10-17'
+          Statement:
+            - Effect: Allow
+              Principal:
+                Service:
+                  - lambda.amazonaws.com
+              Action: sts:AssumeRole
+        ManagedPolicyArns:
+          - arn:aws:iam::aws:policy/service-role/AWSLambdaVPCAccessExecutionRole
+          - arn:aws:iam::aws:policy/AmazonEC2FullAccess
+          - arn:aws:iam::aws:policy/AmazonS3FullAccess
+          - arn:aws:iam::aws:policy/AmazonSSMFullAccess
+
+
+plugins:
+  - serverless-step-functions
+  - serverless-pseudo-parameters
+  - serverless-python-requirements
